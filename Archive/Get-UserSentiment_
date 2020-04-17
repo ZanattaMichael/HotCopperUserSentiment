@@ -1,0 +1,282 @@
+
+
+#$AppKey = 
+
+$UserName = Read-Host "Username"
+
+Class UserPost {
+    [int]$Id
+    [String]$Tag
+    [String]$Subject
+    [String]$URL
+    [String]$Replies
+    [String]$Views
+    [String]$Likes
+    [DateTime]$DatePosted
+    [String[]]$MessageBody
+    [Object]$SentimentResults
+
+    UserPost() {}
+    UserPost([int]$id) {
+        $this.id = $id
+    }
+
+    Static [UserPost] ConvertToUserPost(
+        [HtmlAgilityPack.HtmlNode]$HtmlNode, 
+        [HtmlAgilityPack.HtmlDocument]$HTMLDoc,
+        [Int]$id) {
+
+        $UserPost = [UserPost]::New($id)
+
+        #
+        # Within the HTML Node, extract the Subject, Tags, URL, Reply's (Count),
+        # Views, Likes, Message Body and the Date Posted
+        #
+
+        try {
+
+            $TagData = $HTMLDoc.DocumentNode.SelectNodes("{0}//*[@class='tag-type-symbol']" -f $HtmlNode.XPath)
+
+            $SubjectElement = $HTMLDoc.DocumentNode.SelectNodes("{0}//*[@class='subject-a']" -f $HtmlNode.XPath)
+            $SubjectValue = $SubjectElement.
+                                        SelectNodes("{0}//*[@class='subject-a']" -f $HtmlNode.XPath).
+                                        InnerHtml.Trim().Replace("   ","").Replace("`n","")
+
+            $Responses = $HTMLDoc.DocumentNode.SelectSingleNode("{0}//*[starts-with(@class,'replies-td')]" -f $HtmlNode.XPath)
+            $Stats = $HTMLDoc.DocumentNode.SelectNodes("{0}//*[starts-with(@class,'stats-td')]" -f $HtmlNode.XPath)
+
+        } Catch {
+            Write-Error $_
+            return $UserPost;
+        }
+
+        $UserPost.Subject       = $SubjectValue
+        $UserPost.Tag           = $TagData.InnerText 
+        $UserPost.URL           = ($SubjectElement.Attributes.Where{$_.Name -eq "href"}).Value
+        $UserPost.Replies       = $Responses.InnerText
+        $UserPost.Views         = $Stats[0].InnerText
+        $UserPost.Likes         = $Stats[1].InnerText
+        $UserPost.MessageBody   = Get-PostContent -Url $UserPost.URL
+        $UserPost.DatePosted    = Get-Date $Stats[2].InnerText
+
+        return $UserPost
+    }
+
+}
+
+Class User {
+    [String]$UserName
+    [DateTime]$FirstSeen
+    [DateTime]$LastSeen
+    [System.Collections.Generic.List[UserPost]]$Posts
+    [User[]]$RelatedTo
+
+    User() {}
+
+    User([System.Collections.Generic.List[UserPost]]$posts, [String]$username) {
+        $this.UserName = $username
+        $this.Posts = $posts
+        $this.FirstSeen = ($posts | Sort-Object -Property DatePosted)[0].DatePosted
+        $this.LastSeen = ($posts | Sort-Object -Descending -Property DatePosted)[0].DatePosted
+    }
+
+}
+Function Get-WebUserHistory() {
+    [CmdletBinding()]
+    param (
+        [Parameter(Mandatory, ValueFromPipeline)]
+        [String[]]
+        $Links
+    )
+
+    begin {
+        $list = New-Object "System.Collections.Generic.List[Microsoft.PowerShell.Commands.BasicHtmlWebResponseObject]"
+    }
+
+    process {
+
+        $params = @{
+            URI = "Https://hotcopper.com.au/{0}" -f $Links
+            Method = "Get"
+            UserAgent = [Microsoft.PowerShell.Commands.PSUserAgent]::FireFox            
+        }
+
+        Try {
+            $Result = Invoke-WebRequest @params
+            $list.Add($Result)
+        } Catch {
+            Write-Warning $_
+        }
+
+    }
+
+    end {
+        Write-Output $list
+    }
+
+}
+
+Function Get-Sentiment {
+    [CmdletBinding()]
+    param (
+        [Parameter(Mandatory)]
+        [User]
+        $User
+    )
+
+    $UserPost = $User.Posts.Where{$_.MessageBody -ne ""}
+
+    $params = @{
+        Uri = "https://powershellmichaelsentiment.cognitiveservices.azure.com/text/analytics/v2.1/sentiment"
+        Method = "POST"
+        Headers = @{
+            'Ocp-Apim-Subscription-Key' = "82611d0973094ab99f37e93877640281";
+            'Content-Type' = "application/json";
+        }
+        Body = @{
+            documents = @($UserPost | Select-Object -First 10 | ConvertTo-RestBody)
+        } | ConvertTo-Json
+    }
+
+    $results = Invoke-RestMethod @params
+
+
+}
+
+Function ConvertTo-RestBody {
+    [CmdletBinding()]
+    param (
+        [Parameter(Mandatory,ValueFromPipeline)]
+        [UserPost[]]
+        $UserPosts
+    )
+
+    Begin {
+        $Body = [System.Collections.Generic.List[PSCustomObject]]::New()
+    }
+
+    Process {
+        ForEach ($UserPost in $UserPosts) {
+            $obj = [PSCustomObject]@{
+                language = "en"
+                id = ($Body.Count + 1)
+                text = [String]$UserPost.MessageBody
+            }
+            $Body.Add($obj)
+        }
+    }
+
+    End {
+        Write-Output $Body
+    }
+}
+
+function Get-PostContent {
+    [CmdletBinding()]
+    param (
+        [Parameter(Mandatory)]
+        [AllowNull()]
+        [String]
+        $URL
+    )
+
+    # If null, return to the caller
+    if ($null -eq $URL) { return $null }
+
+    $params = @{
+        URI = "Https://hotcopper.com.au{0}" -f $URL
+        Method = "Get"
+        UserAgent = [Microsoft.PowerShell.Commands.PSUserAgent]::FireFox            
+    }
+
+    $HTMLDoc = [HtmlAgilityPack.HtmlDocument]::new()
+
+    Try {
+        # Invoke the Request
+        $WebContent = Invoke-WebRequest @params
+
+        # Parse the HTML Content into Html Agility Pack
+        $HTMLDoc.LoadHtml($WebContent.Content)
+
+
+        $MessageBox = $HTMLDoc.DocumentNode.SelectSingleNode("//*[starts-with(@class,'message-text')]")
+        $div = $MessageBox.ChildNodes.Where{$_.Name -eq "#text"}
+        $Content = ($div.Text.Trim()).Replace("  ","").Where{$_ -ne ""} -join "."
+
+    } Catch {
+        Write-Error $_
+    } 
+
+    Write-Output $Content
+
+}
+
+$HTTPRequests = [System.Collections.Generic.List[Microsoft.PowerShell.Commands.BasicHtmlWebResponseObject]]::New()
+
+#
+# Build the Int
+$params = @{
+    Uri = "https://hotcopper.com.au/search/search?type=post&users={0}" -f $UserName
+    Method = "Get"
+    SessionVariable = 'WebSession' 
+    UserAgent = [Microsoft.PowerShell.Commands.PSUserAgent]::InternetExplorer
+}
+
+$HTTPRequest = Invoke-WebRequest @params
+$HTTPRequests.Add($HTTPRequest)
+
+$HTMLWeb = [HtmlAgilityPack.HtmlWeb]::New()
+
+#
+# Look for more pages
+
+$PageNumber = 2
+$PageExpirey = $false
+
+Do {
+
+    $match = $HTTPRequests.Links.href.Where{$_ -match ("(page={0})" -f $PageNumber)} | Select-Object -Unique
+    
+    if ([String]::IsNullOrEmpty($match)) {
+        $PageExpirey = $true
+    } else {
+        $HTTPRequests.Add(($match | Get-WebUserHistory))
+        $PageNumber++
+
+    }
+    
+} Until ($PageExpirey)
+
+#
+# Fetch the Table Data
+
+$TableData = $UserHistory
+
+#
+# Let's scrape all that jucy data!
+
+$UserPosts = [System.Collections.Generic.List[UserPost]]::New()
+
+# Iterate Though Each of the Requests
+ForEach ($HTTPRequest in $HTTPRequests) {
+
+    $HTMLDoc = [HtmlAgilityPack.HtmlDocument]::new()
+    $HTMLDoc.LoadHtml($HTTPRequest)
+    
+    # Fetch the Posts Data Table Values, by searching for the user
+    $UserNameField = $HTMLDoc.DocumentNode.SelectNodes("//*[normalize-space() = '$UserName']");
+    # Exclude any objects that contains links (Less the 500 Chars) and no data.
+    $Posts = $UserNameField.ParentNode.Where{$_.OuterHtml.Length -gt 500}
+    
+    $idCounter = 0
+    ForEach ($Post in $Posts) {
+        # Add them to an object
+        $UserPosts.Add([UserPost]::ConvertToUserPost($Post, $HTMLDoc, $idCounter++))
+    }
+}
+
+$User = [User]::New($UserPosts, $Username)
+
+#Get-Sentiment -User $User
+
+Write-Output $User
