@@ -97,7 +97,8 @@ Class UserPost {
         $UserPost.Views             = $Stats[0].InnerText
         $UserPost.Likes             = $Stats[1].InnerText
         $UserPost.MessageBody       = Get-PostContent -Url $UserPost.URL
-        $UserPost.DatePosted        = Get-Date $Stats[2].InnerText
+        # Custom Parse the DateTime since the Function is running in EN-US and needs to be EN-AU
+        $UserPost.DatePosted        = [datetime]::Parse($Stats[2].InnerText, [cultureinfo]::New("en-AU"))
         $UserPost.SentimentResults  = [System.Collections.Generic.List[Object]]::New()
         return $UserPost
     }
@@ -198,7 +199,7 @@ Function Get-Sentiment {
             }
             Body = $RestRequestUserPost.RestBody | ConvertTo-Json
         }
-        
+
         try {
             $results = Invoke-RestMethod @params
         } Catch {
@@ -220,13 +221,8 @@ Function Get-Sentiment {
         # Iterate through each of the items and join it back to user post.
         For ($index = 0; $index -ne $RestRequestUserPost.MessageID.Length; $index++) {
 
-            # Match the Current Index to the User Post Index
-            $UserPostIndex = @(0 .. $RestRequestUserPost.MessageID.Length).Where{
-                $User.Posts[$_].Id -eq $index
-            }
-
-            # Match the Results ID against the Request ID. They are the same.
-            $Result = $results.documents.Where{$_.id -eq $User.Posts[$UserPostIndex].id}
+            $UserPostIndex = $RestRequestUserPost.MessageID[$index]
+            $Result = $results.documents[$index]
 
             # Now we have the value we can update the result
             $User.Posts[$UserPostIndex].AddResult($Result)
@@ -546,12 +542,54 @@ function Get-PostContent {
         # Create a Unicode String/ Removing all x00 Chars. Not the preferred way.
         # ($ConvertedContent -replace '[\x0A\x0D\x09]', "") is preferred however no luck with PWSH 6
         $ConvertedContent = [String]::New($UnicodeByteArray.Where{$_ -ne 0})
+        # Sanitise Uncommon Charachters
+        $SanitisedCharachters = $ConvertedContent | Optimize-Characters
 
     } Catch {
         Write-Error $_
     } 
 
-    Write-Output ($ConvertedContent)
+    Write-Output ($SanitisedCharachters)
+}
+
+Function Optimize-Characters {
+    [CmdletBinding()]
+    param (
+        [Parameter(Mandatory, ValueFromPipeline)]
+        [AllowEmptyString()]
+        [String]
+        $Post
+    )
+
+    Begin {
+        $Data = data {
+            @(
+                @{
+                    Char = "¢"
+                    ReplaceValue = "cents"
+                },
+                @{
+                    Char = "$"
+                    ReplaceValue = "dollars"
+                }
+            )
+        }
+    }
+
+    Process {
+
+        if ([String]::IsNullOrEmpty($Post)) { return }
+
+        $Data | ForEach-Object {
+            $post = $Post.Replace($_.Char, $_.ReplaceValue)
+        }
+    }
+
+    End {
+        Write-Output $Post
+    }
 }
 
 #endregion Functions
+
+
