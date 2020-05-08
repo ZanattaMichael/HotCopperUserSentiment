@@ -41,85 +41,16 @@ Add-Type -LiteralPath $HTMLAgilityPackPath
 #
 #region Classes
 
-Class UserPost {
-    [int]$Id
-    [String]$Tag
-    [String]$Subject
-    [String]$URL
-    [String]$Replies
-    [String]$Views
-    [String]$Likes
-    [DateTime]$DatePosted
-    [String[]]$MessageBody
-    [System.Collections.Generic.List[Object]]$SentimentResults
-
-    UserPost() {}
-    UserPost([int]$id) {
-        $this.id = $id
-    }
-
-    #region ConvertToUserPost
-    Static [UserPost] ConvertToUserPost(
-        [Object]$HtmlNode, 
-        [Object]$HTMLDoc,
-        [Int]$id) {
-
-        $UserPost = [UserPost]::New($id)
-
-        #
-        # Within the HTML Node, extract the Subject, Tags, URL, Reply's (Count),
-        # Views, Likes, Message Body and the Date Posted
-        #
-
-        try {
-
-            $TagData = $HTMLDoc.DocumentNode.SelectNodes("{0}//*[@class='tag-type-symbol']" -f $HtmlNode.XPath)
-
-            $SubjectElement = $HTMLDoc.DocumentNode.SelectNodes("{0}//*[@class='subject-a']" -f $HtmlNode.XPath)
-            $SubjectValue = $SubjectElement.
-                                        SelectNodes("{0}//*[@class='subject-a']" -f $HtmlNode.XPath).
-                                        InnerHtml.Trim().Replace("   ","").Replace("`n","")
-
-            $Responses = $HTMLDoc.DocumentNode.SelectSingleNode("{0}//*[starts-with(@class,'replies-td')]" -f $HtmlNode.XPath)
-            $Stats = $HTMLDoc.DocumentNode.SelectNodes("{0}//*[starts-with(@class,'stats-td')]" -f $HtmlNode.XPath)
-
-           
-
-        } Catch {
-            Write-Error $_
-            return $UserPost;
-        }
-
-        $UserPost.Subject           = $SubjectValue
-        $UserPost.Tag               = $TagData.InnerText 
-        $UserPost.URL               = ($SubjectElement.Attributes.Where{$_.Name -eq "href"}).Value
-        $UserPost.Replies           = $Responses.InnerText
-        $UserPost.Views             = $Stats[0].InnerText
-        $UserPost.Likes             = $Stats[1].InnerText
-        $UserPost.MessageBody       = Get-PostContent -Url $UserPost.URL
-        # Custom Parse the DateTime since the Function is running in EN-US and needs to be EN-AU
-        $UserPost.DatePosted        = [datetime]::Parse($Stats[2].InnerText, [cultureinfo]::New("en-AU"))
-        $UserPost.SentimentResults  = [System.Collections.Generic.List[Object]]::New()
-        return $UserPost
-    }
-    #endregion ConvertToUserPost
-
-    AddResult([PSCustomObject]$Result) {
-        $this.SentimentResults.Add($Result)
-    }
-
-}
-
 Class User {
     [String]$UserName
     [DateTime]$FirstSeen
     [DateTime]$LastSeen
-    [System.Collections.Generic.List[UserPost]]$Posts
+    [System.Collections.Generic.List[PSCustomObject]]$Posts
     [User[]]$RelatedTo
 
     User() {}
 
-    User([System.Collections.Generic.List[UserPost]]$posts, [String]$username) {
+    User([System.Collections.Generic.List[PSCustomObject]]$posts, [String]$username) {
         $this.UserName = $username
         $this.Posts = $posts
         $this.FirstSeen = ($posts | Sort-Object -Property DatePosted)[0].DatePosted
@@ -134,7 +65,75 @@ Class User {
 #
 #region Functions
 
-Function Get-WebUserHistory() {
+
+Function ConvertTo-UserPost {
+    [CmdletBinding()]
+    param (
+        [Parameter(Mandatory)]
+        [Object]
+        $HtmlNode,
+        [Parameter(Mandatory)] 
+        [Object]
+        $HTMLDoc,
+        [Parameter(Mandatory)]
+        [Int]
+        $id
+    )
+
+    #
+    # Declare the User Post Object
+    #
+
+    $UserPost = [PSCustomObject]@{
+        Id = $id
+        Name = Value
+        Subject = $null
+        Tag = $null
+        URL =  $null
+        Replies = $null 
+        Views = $null
+        Likes =  $null
+        MessageBody = $null
+        DatePosted = $null
+        SentimentResults = [System.Collections.Generic.List[Object]]::New()
+    }
+
+    #
+    # Within the HTML Node, extract the Subject, Tags, URL, Reply's (Count),
+    # Views, Likes, Message Body and the Date Posted
+    #
+
+    try {
+
+        $TagData = $HTMLDoc.DocumentNode.SelectNodes("{0}//*[@class='tag-type-symbol']" -f $HtmlNode.XPath)
+
+        $SubjectElement = $HTMLDoc.DocumentNode.SelectNodes("{0}//*[@class='subject-a']" -f $HtmlNode.XPath)
+        $SubjectValue = $SubjectElement.
+                                    SelectNodes("{0}//*[@class='subject-a']" -f $HtmlNode.XPath).
+                                    InnerHtml.Trim().Replace("   ","").Replace("`n","")
+
+        $Responses = $HTMLDoc.DocumentNode.SelectSingleNode("{0}//*[starts-with(@class,'replies-td')]" -f $HtmlNode.XPath)
+        $Stats = $HTMLDoc.DocumentNode.SelectNodes("{0}//*[starts-with(@class,'stats-td')]" -f $HtmlNode.XPath)
+
+    } Catch {
+        Write-Error $_
+        return $UserPost;
+    }
+
+    $UserPost.Subject           = $SubjectValue
+    $UserPost.Tag               = $TagData.InnerText 
+    $UserPost.URL               = ($SubjectElement.Attributes.Where{$_.Name -eq "href"}).Value
+    $UserPost.Replies           = $Responses.InnerText
+    $UserPost.Views             = $Stats[0].InnerText
+    $UserPost.Likes             = $Stats[1].InnerText
+    $UserPost.MessageBody       = Get-PostContent -Url $UserPost.URL
+    # Custom Parse the DateTime since the Function is running in EN-US and needs to be EN-AU
+    $UserPost.DatePosted        = [datetime]::Parse($Stats[2].InnerText, [cultureinfo]::New("en-AU"))
+    return $UserPost
+
+}
+
+Function Get-WebUserHistory {
     [CmdletBinding()]
     param (
         [Parameter(Mandatory, ValueFromPipeline)]
@@ -225,7 +224,7 @@ Function Get-Sentiment {
             $Result = $results.documents[$index]
 
             # Now we have the value we can update the result
-            $User.Posts[$UserPostIndex].AddResult($Result)
+            $User.Posts[$UserPostIndex].SentimentResults.Add($Result)
         }
     }
     

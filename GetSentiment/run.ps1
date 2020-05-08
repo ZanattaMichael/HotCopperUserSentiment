@@ -56,6 +56,29 @@ Do {
     
 } Until ($PageExpirey)
 
+
+#
+# Enumerate all Classes and Functions into a ScriptBlock that can be invoked when running a PowerShell
+
+$PreInitializationCode = {
+    # Get Location
+    $Location = Get-Location
+    $HTMLAgilityPackPath = [System.IO.Path]::Combine($Location.Path,"HTMLAgilityPack","HtmlAgilityPack.dll")
+
+    # Test if the Path Exists
+    if (-not(Test-Path -LiteralPath $HTMLAgilityPackPath)) {
+        Throw ("Cannot Find: $HTMLAgilityPackPath")
+    }
+    # Load the Assembly
+    Add-Type -LiteralPath $HTMLAgilityPackPath    
+}.ToString()
+
+# Enumerate all the Functions that are not loaded from a module. This will include alias functions as well.
+(Get-Item "Function:*").Where{$_.Source -eq "" -and $_.CommandType -eq "Function"} | ForEach-Object { $PreInitializationCode += [String]"Function $($_.Name) { $($_.ScriptBlock) };" }
+
+# Build out a scriptblock of the functions
+$PreInitializationCodeScriptBlock = [scriptblock]::Create($PreInitializationCode)
+
 #
 # Let's scrape all that jucy data!
 
@@ -63,6 +86,9 @@ $UserPosts = [System.Collections.Generic.List[UserPost]]::New()
 
 # Define the ID Counter
 $idCounter = 0
+
+# PowerShell Job Limit
+$PowerShellJobLimit = 10
 
 # Iterate Though Each of the Requests
 ForEach ($HTTPRequest in $HTTPRequests) {
@@ -72,13 +98,44 @@ ForEach ($HTTPRequest in $HTTPRequests) {
     
     # Fetch the Posts Data Table Values, by searching for the user
     $UserNameField = $HTMLDoc.DocumentNode.SelectNodes("//*[normalize-space() = '$UserName']");
+    
     # Exclude any objects that contains links (Less the 500 Chars) and no data.
     $Posts = $UserNameField.ParentNode.Where{$_.OuterHtml.Length -gt 500}
     
+    # Iterate through each of the Posts
     ForEach ($Post in $Posts) {
-        # Add them to an object
-        $UserPosts.Add([UserPost]::ConvertToUserPost($Post, $HTMLDoc, $idCounter++))
+
+        #
+        # Basic PowerShell Job Manager
+
+        $job = $null
+        Do {
+
+            $CompletedJobs = Get-Job -State Completed
+
+            if ($CompletedJobs.Count -le $PowerShellJobLimit) {
+
+                $job = Start-Job -InitializationScript $PreInitializationCodeScriptBlock -ScriptBlock {
+                    param (
+                        [Object]$HtmlNode,
+                        [Object]$HTMLDoc,
+                        [Int]$id
+                    )
+                    
+                    ConvertTo-UserPost $HtmlNode, $HTMLDoc, $id
+                } -ArgumentList $Post, $HTMLDoc, $idCounter++
+
+            }
+        } Until ($null -ne $job)
+
     }
+
+    Get-Job -State Completed | ForEach-Object {
+        $_ | Receive-Job
+
+        
+    }
+
 }
 
 $Body = Get-Sentiment -User ([User]::New($UserPosts, $Username))
