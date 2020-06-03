@@ -21,11 +21,26 @@
 # You can also define functions or aliases that can be referenced in any of your PowerShell functions.
 
 #
+# Parameters
+#
+$Location = Get-Location
+
+#
+# Import all Saved Modules
+#
+
+$ModulesPath = [System.IO.Path]::Combine($Location.Path,"Modules")
+# Import the Respective Manifest File
+Get-ChildItem -LiteralPath $ModulesPath -Recurse -Filter *.psd1 | ForEach-Object {
+    Import-Module -Name $_.FullName
+}
+
+#
 # Add Dlls
 #
 
 # Get Location
-$Location = Get-Location
+
 $HTMLAgilityPackPath = [System.IO.Path]::Combine($Location.Path,"HTMLAgilityPack","HtmlAgilityPack.dll")
 
 if (-not(Test-Path -LiteralPath $HTMLAgilityPackPath)) {

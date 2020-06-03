@@ -22,6 +22,58 @@ if (-not($UserName)) {
 
 $HTTPRequests = [System.Collections.Generic.List[Microsoft.PowerShell.Commands.BasicHtmlWebResponseObject]]::New()
 
+# =========================================================
+# Parameter Block
+# =========================================================
+
+$JobScriptBlock = {
+                    param (
+                        [Object]$HtmlNode,
+                        [Object]$HTMLDoc,
+                        [Int]$id
+                    )
+                    ConvertTo-UserPost $HtmlNode, $HTMLDoc, $id
+                }
+
+
+#
+# Enumerate all Classes and Functions into a ScriptBlock that can be invoked when running a PowerShell
+
+
+$PreInitializationCode = {
+    # Get Location
+    $Location = Get-Location
+    $HTMLAgilityPackPath = [System.IO.Path]::Combine($Location.Path,"HTMLAgilityPack","HtmlAgilityPack.dll")
+
+    # Test if the Path Exists
+    if (-not(Test-Path -LiteralPath $HTMLAgilityPackPath)) {
+        Throw ("Cannot Find: $HTMLAgilityPackPath")
+    }
+    # Load the Assembly
+    Add-Type -LiteralPath $HTMLAgilityPackPath    
+}.ToString()
+
+# Add the following Functions.
+$FunctionsToInclude = 'ConvertTo-UserPost',
+                    'Get-WebUserHistory',
+                    'Get-Sentiment',
+                    'Get-IndicesOf ',
+                    'Split-Paragraph',
+                    'Split-StringOnCharValue',
+                    'ConvertTo-RestBody',
+                    'Get-PostContent',
+                    'Optimize-Characters'
+
+(Get-Item "Function:*").Where{$_.Name -in $FunctionsToInclude } | ForEach-Object { $PreInitializationCode += [String]"Function $($_.Name) { $($_.ScriptBlock) };" }
+
+# Build out a scriptblock of the functions
+$PreInitializationCodeScriptBlock = [scriptblock]::Create($PreInitializationCode)
+
+# =========================================================
+# Main Block
+# =========================================================
+
+
 #
 # Build the Int
 $params = @{
@@ -58,31 +110,9 @@ Do {
 
 
 #
-# Enumerate all Classes and Functions into a ScriptBlock that can be invoked when running a PowerShell
-
-$PreInitializationCode = {
-    # Get Location
-    $Location = Get-Location
-    $HTMLAgilityPackPath = [System.IO.Path]::Combine($Location.Path,"HTMLAgilityPack","HtmlAgilityPack.dll")
-
-    # Test if the Path Exists
-    if (-not(Test-Path -LiteralPath $HTMLAgilityPackPath)) {
-        Throw ("Cannot Find: $HTMLAgilityPackPath")
-    }
-    # Load the Assembly
-    Add-Type -LiteralPath $HTMLAgilityPackPath    
-}.ToString()
-
-# Enumerate all the Functions that are not loaded from a module. This will include alias functions as well.
-(Get-Item "Function:*").Where{$_.Source -eq "" -and $_.CommandType -eq "Function"} | ForEach-Object { $PreInitializationCode += [String]"Function $($_.Name) { $($_.ScriptBlock) };" }
-
-# Build out a scriptblock of the functions
-$PreInitializationCodeScriptBlock = [scriptblock]::Create($PreInitializationCode)
-
-#
 # Let's scrape all that jucy data!
 
-$UserPosts = [System.Collections.Generic.List[UserPost]]::New()
+$UserPosts = [System.Collections.Generic.List[PSCustomObject]]::New()
 
 # Define the ID Counter
 $idCounter = 0
@@ -111,33 +141,29 @@ ForEach ($HTTPRequest in $HTTPRequests) {
         $job = $null
         Do {
 
-            $CompletedJobs = Get-Job -State Completed
+            $RunningJobs = Get-Job -State Running
 
-            if ($CompletedJobs.Count -le $PowerShellJobLimit) {
+            if ($RunningJobs.Count -le $PowerShellJobLimit) {
 
-                $job = Start-Job -InitializationScript $PreInitializationCodeScriptBlock -ScriptBlock {
-                    param (
-                        [Object]$HtmlNode,
-                        [Object]$HTMLDoc,
-                        [Int]$id
-                    )
-                    
-                    ConvertTo-UserPost $HtmlNode, $HTMLDoc, $id
-                } -ArgumentList $Post, $HTMLDoc, $idCounter++
+                $params = @{
+                    InitializationScript = $PreInitializationCodeScriptBlock
+                    ScriptBlock = $JobScriptBlock
+                    ArgumentList = $Post, $HTMLDoc, $idCounter++
+                }
+
+                $job = Start-ThreadJob @params
 
             }
         } Until ($null -ne $job)
 
     }
 
-    Get-Job -State Completed | ForEach-Object {
-        $_ | Receive-Job
-
-        
-    }
+    Wait-Debugger
+    # Add the Results to $UsersPosts
+    Get-Job -State Completed | ForEach-Object { $UserPosts.Add((Receive-Job $_)) }
 
 }
-
+Wait-Debugger
 $Body = Get-Sentiment -User ([User]::New($UserPosts, $Username))
 
 # Associate values to output bindings by calling 'Push-OutputBinding'.
