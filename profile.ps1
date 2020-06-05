@@ -101,7 +101,7 @@ Function ConvertTo-UserPost {
 
     $UserPost = [PSCustomObject]@{
         Id = $id
-        Name = Value
+        Name = $null
         Subject = $null
         Tag = $null
         URL =  $null
@@ -576,6 +576,9 @@ Function Optimize-Characters {
     )
 
     Begin {
+
+        $WhiteListedChars = "[^a-zA-Z\d\s\.\,\!\@\#\%\^\&\*\)\)\+\-\*\/\[\]\(\)]"
+
         $Data = data {
             @(
                 @{
@@ -585,7 +588,7 @@ Function Optimize-Characters {
                 @{
                     Char = "$"
                     ReplaceValue = "dollars"
-                }
+                }             
             )
         }
     }
@@ -600,10 +603,9 @@ Function Optimize-Characters {
     }
 
     End {
-        Write-Output $Post
+        Write-Output ($Post -replace $WhiteListedChars, "")
     }
 }
-
 #endregion Functions
 
 

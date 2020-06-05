@@ -27,14 +27,16 @@ $HTTPRequests = [System.Collections.Generic.List[Microsoft.PowerShell.Commands.B
 # =========================================================
 
 $JobScriptBlock = {
-                    param (
-                        [Object]$HtmlNode,
-                        [Object]$HTMLDoc,
-                        [Int]$id
-                    )
-                    ConvertTo-UserPost $HtmlNode, $HTMLDoc, $id
-                }
+    param (
+        [Object]$HtmlNode,
+        [Object]$HTMLDoc,
+        [Int]$id
+    )
 
+    write-host "ID: $id"
+
+    ConvertTo-UserPost -HtmlNode $HtmlNode -HTMLDoc $HTMLDoc -Id $id
+}
 
 #
 # Enumerate all Classes and Functions into a ScriptBlock that can be invoked when running a PowerShell
@@ -141,6 +143,8 @@ ForEach ($HTTPRequest in $HTTPRequests) {
         $job = $null
         Do {
 
+            Write-Verbose "Starting Job"
+
             $RunningJobs = Get-Job -State Running
 
             if ($RunningJobs.Count -le $PowerShellJobLimit) {
@@ -150,20 +154,16 @@ ForEach ($HTTPRequest in $HTTPRequests) {
                     ScriptBlock = $JobScriptBlock
                     ArgumentList = $Post, $HTMLDoc, $idCounter++
                 }
-
                 $job = Start-ThreadJob @params
 
             }
         } Until ($null -ne $job)
 
     }
-
-    Wait-Debugger
-    # Add the Results to $UsersPosts
-    Get-Job -State Completed | ForEach-Object { $UserPosts.Add((Receive-Job $_)) }
-
 }
-Wait-Debugger
+
+# Add the Results to $UsersPosts
+Get-Job | Wait-Job | Receive-Job | ForEach-Object { $UserPosts.Add($_) }
 $Body = Get-Sentiment -User ([User]::New($UserPosts, $Username))
 
 # Associate values to output bindings by calling 'Push-OutputBinding'.
