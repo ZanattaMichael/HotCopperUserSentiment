@@ -120,7 +120,7 @@ $UserPosts = [System.Collections.Generic.List[PSCustomObject]]::New()
 $idCounter = 0
 
 # PowerShell Job Limit
-$PowerShellJobLimit = 10
+$PowerShellJobLimit = 50
 
 # Iterate Though Each of the Requests
 ForEach ($HTTPRequest in $HTTPRequests) {
